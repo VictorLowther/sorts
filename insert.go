@@ -1,61 +1,55 @@
 package sorts
 
-import "sort"
-
-func binarySearchForwards(a sort.Interface, left, right, ref int) int {
+func (sd *sortData) binarySearchBackwards(left, right, ref int) int {
 	mid := 0
 	for left < right {
 		mid = int(uint(left+right)>>1) + 1
-		if a.Less(mid, ref) {
-			left = mid
-		} else {
+		if sd.gt(ref, mid) {
 			right = mid - 1
+		} else {
+			left = mid
 		}
 	}
 	return right
 }
 
-func moveLeftmostElementForwards(a sort.Interface, left, right int) {
-	target := binarySearchForwards(a,left,right,left)
-	for ; left < target; left++ {
-		a.Swap(left, left+1)
-	}
-}
-
-func binarySearchBackwards(a sort.Interface, left, right, ref int) int {
+func (sd *sortData) binarySearchForwards(left, right, ref int) int {
 	mid := 0
 	for left < right {
 		mid = int(uint(left+right) >> 1)
-		if a.Less(ref, mid) {
+		if sd.less(ref, mid) {
 			right = mid
 		} else {
 			left = mid + 1
 		}
+
 	}
 	return left
 }
 
-func moveRightmostElementBackwards(a sort.Interface, left, right int) {
-	target := binarySearchBackwards(a,left,right,right)
-	for ; right > target; right-- {
-		a.Swap(right, right-1)
+func (sd *sortData) reverse(left, right int) {
+	for left < right {
+		sd.data[left], sd.data[right] = sd.data[right], sd.data[left]
+		left++
+		right--
 	}
 }
 
-// insertionSort is a binary insertion sort, geared to sorting part of a larger list.
-// first and last are the first and last indexes in the data to sort in,
-// and start is the first
-// element between lo and hi that we already know to be sorted.
-func insertionSort(a sort.Interface, first, last, sortedAt int) {
+func (sd *sortData) insertionSort(first, last, sortedAt int) {
 	if sortedAt < first {
 		sortedAt = first
 	}
 	sortedAt++
 	for ; sortedAt <= last; sortedAt++ {
-		moveRightmostElementBackwards(a, first, sortedAt)
+		for j := sortedAt; j > first && sd.less(j, j-1); j-- {
+			sd.data[j], sd.data[j-1] = sd.data[j-1], sd.data[j]
+		}
 	}
 }
 
-func InsertionSort(a sort.Interface) {
-	insertionSort(a,0,a.Len(),0)
+// InsertionSort is a simple insertion sort.  It is very cache-friendly
+// for small amounts of data, but the runtime costs are terrible for more
+// than 16 or so items
+func InsertionSort(vals []int, a Less) {
+	(&sortData{data: vals, less: a}).insertionSort(0, len(vals)-1, 0)
 }

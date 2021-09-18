@@ -2,7 +2,6 @@ package sorts
 
 import (
 	"math"
-	"sort"
 )
 
 // Powersort, an adaptive mergesort, described here: https://arxiv.org/pdf/1805.04154.pdf
@@ -11,25 +10,12 @@ import (
 // position in a nearly-optimal binary merge tree.
 
 var (
-	minRunLen = 16
+	minRunLen = 32
 )
 
-// reverse all items in a range. Used when we detect a run
-// of descending data.
-func reverse(a sort.Interface, start, end int) {
-	for start < end {
-		a.Swap(start, end)
-		start++
-		end--
-	}
-}
-
-// since we don't already have it when we need it...
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
+type powerSort struct {
+	sortData
+	mergeBuf []int
 }
 
 // Find or create an ascending run in the given range.
@@ -42,27 +28,27 @@ func min(a, b int) int {
 //
 // If we found a natural run that is less than minRunLen, we will
 // extend it to minRunLen using an insertion sort .
-func findOrCreateRun(a sort.Interface, start, last int) (sortedTo int) {
+func (p *powerSort) findOrCreateRun(start, last int) (sortedTo int) {
 	sortedTo = start
 	if sortedTo == last {
 		return
 	}
 	sortedTo++
-	if a.Less(sortedTo, sortedTo-1) {
+	if p.less(sortedTo, sortedTo-1) {
 		// Assume we are in a descending run.
 		// Stop at the first item that is not in strict descending order.
 		// Reverse the list that we found that was in strict descending order.
 		for ; sortedTo < last; sortedTo++ {
-			if !a.Less(sortedTo+1, sortedTo) {
+			if !p.less(sortedTo+1, sortedTo) {
 				break
 			}
 		}
-		reverse(a, start, sortedTo)
+		p.reverse(start, sortedTo)
 	} else {
 		// Assume we are in a weakly ascending run.
 		// Stop at the first item that is not in weakly ascensing order.
 		for ; sortedTo < last; sortedTo++ {
-			if a.Less(sortedTo+1, sortedTo) {
+			if p.less(sortedTo+1, sortedTo) {
 				break
 			}
 		}
@@ -73,7 +59,7 @@ func findOrCreateRun(a sort.Interface, start, last int) (sortedTo int) {
 		// Found a too-short natural run that we can extend.
 		// Extend and sort it using an insertion sort.
 		last = min(last, start+minRunLen-1)
-		insertionSort(a, start, last, sortedTo)
+		p.insertionSort(start, last, sortedTo)
 		sortedTo = last
 	}
 	return
@@ -87,22 +73,22 @@ func findOrCreateRun(a sort.Interface, start, last int) (sortedTo int) {
 //
 // Adapted from nodePowerBitwise in
 // https://github.com/sebawild/nearly-optimal-mergesort-code/blob/master/src/wildinter/net/mergesort/PowerSort.java
-func nodePower(totalLen, startA, startB, endB int) int {
+func (p *powerSort) nodePower(startA, startB, endB int) int {
 	relativePowerA := startA + startB
 	relativePowerB := startB + endB + 1
 	commonBits := 0
 	var digitA, digitB bool
 	for {
-		digitA, digitB = relativePowerA >= totalLen, relativePowerB >= totalLen
+		digitA, digitB = relativePowerA >= len(p.data), relativePowerB >= len(p.data)
 		if digitA != digitB {
 			break
 		}
 		commonBits++
 		if digitA {
-			relativePowerA -= totalLen
+			relativePowerA -= len(p.data)
 		}
 		if digitB {
-			relativePowerB -= totalLen
+			relativePowerB -= len(p.data)
 		}
 		relativePowerA <<= 1
 		relativePowerB <<= 1
@@ -111,46 +97,68 @@ func nodePower(totalLen, startA, startB, endB int) int {
 	return commonBits
 }
 
-// All this stuff will get inlined, since they are all leaf calls.
-type runStack [][2]int
+func (p *powerSort) mergeAt(left, mid, right int) {
+	if !p.less(mid+1, mid) {
+		// Already merged
+		return
+	}
+	left = p.binarySearchForwards(left, mid-1, mid)
+	right = p.binarySearchBackwards(mid, right, mid-1)
+	start := left
+	p.mergeBuf = p.mergeBuf[:0]
+	mid++
+	pivot := mid
+	for left < pivot && mid < right+1 {
+		if p.less(mid, left) {
+			p.mergeBuf = append(p.mergeBuf, p.data[mid])
+			mid++
+		} else {
+			p.mergeBuf = append(p.mergeBuf, p.data[left])
+			left++
+		}
+	}
+	if left < pivot {
+		p.mergeBuf = append(p.mergeBuf, p.data[left:pivot]...)
+	} else {
+		p.mergeBuf = append(p.mergeBuf, p.data[mid:right+1]...)
+	}
+	copy(p.data[start:], p.mergeBuf)
 
-func (r runStack) entryAt(i int) bool {
-	return !(r[i][0] == 0 && r[i][1] == 0)
 }
 
-func (r runStack) setAt(i, first, last int) {
-	r[i][0], r[i][1] = first, last
-}
-
-func (r runStack) mergeAt(a sort.Interface, i, last int) int {
-	symMerge(a, r[i][0], r[i][1]+1, last)
-	return r[i][0]
-}
-
-func PowerSort(a sort.Interface) {
+func (p *powerSort) sort() {
 	var top, firstA, lastA, firstB, lastB, power, i, totalLen int
-	totalLen = a.Len()
+	totalLen = len(p.data)
 	// Entries in the runs are indexed by their node power.
 	// Node power will never be more than log2(totalLen) + 1
 	// Therefore, the runstack needs to contain (log2(totalLen)+1) entries
-	runs := make(runStack, int(math.Log2(float64(totalLen)))+1)
-	lastA = findOrCreateRun(a, 0, totalLen-1)
+	runs := make([][2]int, int(math.Log2(float64(totalLen)))+1)
+	entryAt := func(i int) bool { return !(runs[i][0] == 0 && runs[i][1] == 0) }
+	lastA = p.findOrCreateRun(0, totalLen-1)
 	for lastA < totalLen-1 {
-		firstB, lastB = lastA+1, findOrCreateRun(a, lastA+1, totalLen-1)
-		power = nodePower(totalLen, firstA, firstB, lastB)
+		firstB, lastB = lastA+1, p.findOrCreateRun(lastA+1, totalLen-1)
+		power = p.nodePower(firstA, firstB, lastB)
 		for i = top; i > power; i-- {
-			if runs.entryAt(i) {
-				firstA = runs.mergeAt(a, i, lastA+1)
-				runs.setAt(i, 0, 0)
+			if entryAt(i) {
+				p.mergeAt(runs[i][0], runs[i][1], lastA)
+				firstA = runs[i][0]
+				runs[i][0], runs[i][1] = 0, 0
 			}
 		}
-		runs.setAt(power, firstA, lastA)
+		runs[power][0], runs[power][1] = firstA, lastA
 		top = power
 		firstA, lastA = firstB, lastB
 	}
 	for i = top; i >= 0; i-- {
-		if runs.entryAt(i) {
-			runs.mergeAt(a, i, totalLen)
+		if entryAt(i) {
+			p.mergeAt(runs[i][0], runs[i][1], totalLen-1)
 		}
 	}
+}
+
+func Powersort(vals []int, a Less) {
+	ps := &powerSort{}
+	ps.data = vals
+	ps.less = a
+	ps.sort()
 }
