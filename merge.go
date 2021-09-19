@@ -2,6 +2,19 @@ package sorts
 
 import "sort"
 
+// Lifted from the standard library for benchmark and fooling around
+// purposes, and adapted to use the sort primitives in this package.
+//
+// A shame that the way sort.Interface works more or less forces us to rely
+// on an in-place merge algorithm -- powersort tends to collect runs that
+// have unequal lengths, which doesn't work well with symMerge's preference
+// for equal-ish length sides.  Perhaps a more complicated in-place merge
+// sort would work better, but the ones based on block sort merging
+// (http://itbe.hanyang.ac.kr/ak/papers/tamc2008.pdf, etc.) are much trickier
+// to reason about and implement than symmerge is.
+//
+// Maybe generics will save us from the cruel tyranny forced in-place sorts.
+//
 // symMerge merges the two sorted subsequences data[a:m] and data[m:b] using
 // the SymMerge algorithm from Pok-Son Kim and Arne Kutzner, "Stable Minimum
 // Storage Merging by Symmetric Comparisons", in Susanne Albers and Tomasz
@@ -21,18 +34,40 @@ import "sort"
 // symMerge assumes non-degenerate arguments: a < m && m < b.
 // Having the caller check this condition eliminates many leaf recursion calls,
 // which improves performance.
-func (sd *sortData) symMerge(left, mid, oneAfterRight int) {
-	var pivot int
+func symMerge(sd sort.Interface, left, mid, oneAfterRight int) {
 	// If either side only has one element to merge, just insert it
 	// directly into place.
+	var pivot int
 	if mid-left == 1 {
-		pivot = sd.largestLessThan(mid, oneAfterRight-1, left)
-		sd.rotateLeftwards(left, pivot-1)
+		// one day, when the inliner is smarterer
+		// pivot = largestLessThan(sd, mid, oneAfterRight-1, left)
+		// rotateLeftwards(sd, left, pivot-1)
+		pivot = mid
+		for pivot < oneAfterRight {
+			m := median(pivot, oneAfterRight)
+			if sd.Less(m, left) {
+				pivot = m + 1
+			} else {
+				oneAfterRight = m
+			}
+		}
+		rotateLeftwards(sd, left, pivot-1)
 		return
 	}
 	if oneAfterRight-mid == 1 {
-		pivot = sd.smallestGreaterThan(left, mid, mid)
-		sd.rotateRightwards(pivot, mid)
+		// Also when the inliner is smarter:
+		// pivot = sd.smallestGreaterThan(left, mid, mid)
+		// sd.rotateRightwards(pivot, mid)
+		pivot = mid
+		for left < pivot {
+			m := median(left, pivot)
+			if lte(sd, m, mid) {
+				left = m + 1
+			} else {
+				pivot = m
+			}
+		}
+		rotateRightwards(sd, left, mid)
 		return
 	}
 
@@ -50,7 +85,7 @@ func (sd *sortData) symMerge(left, mid, oneAfterRight int) {
 
 	for start < r {
 		c := int(uint(start+r) >> 1)
-		if !sd.less(p-c, c) {
+		if !sd.Less(p-c, c) {
 			start = c + 1
 		} else {
 			r = c
@@ -59,17 +94,12 @@ func (sd *sortData) symMerge(left, mid, oneAfterRight int) {
 
 	end := n - start
 	if start < mid && mid < end {
-		sd.blockSwap(start, mid, end-1)
+		blockSwap(sd, start, mid, end-1)
 	}
 	if left < start && start < pivot {
-		sd.symMerge(left, start, pivot)
+		symMerge(sd, left, start, pivot)
 	}
 	if pivot < end && end < oneAfterRight {
-		sd.symMerge(pivot, end, oneAfterRight)
+		symMerge(sd, pivot, end, oneAfterRight)
 	}
-}
-
-func StdlibStable(vals []int, a Less) {
-	sort.Stable(&sortData{data: vals, less: a})
-
 }

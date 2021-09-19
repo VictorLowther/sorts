@@ -1,17 +1,13 @@
 package sorts
 
-// Powersort, an adaptive mergesort, described here: https://arxiv.org/pdf/1805.04154.pdf
-// The key improvement powersort makes over the standard library merge sort is in carefully
-// choosing when to merge adjacent runs of already sorted data based on their calculated
-// position in a nearly-optimal binary merge tree.
+import "sort"
 
 var (
-	minRunLen = 32
+	// Chosen to work well-ish enough. Too small, and symMerge
+	// moves too much data, and too big, the On^2 nature of
+	// insertion sort starts eating you alive.
+	minRunLen = 16
 )
-
-type powerSort struct {
-	sortData
-}
 
 // Find or create an ascending run in the given range.
 // This will also handle reversing descending runs.
@@ -23,27 +19,27 @@ type powerSort struct {
 //
 // If we found a natural run that is less than minRunLen, we will
 // extend it to minRunLen using an insertion sort .
-func (p *powerSort) findOrCreateRun(left, right int) (last int) {
+func findOrCreateRun(p sort.Interface, left, right int) (last int) {
 	last = left
 	if last == right {
 		return
 	}
 	last++
-	if p.less(last, last-1) {
+	if p.Less(last, last-1) {
 		// Assume we are in a descending run.
 		// Stop at the first item that is not in strict descending order.
 		// Reverse the list that we found that was in strict descending order.
 		for ; last < right; last++ {
-			if !p.less(last+1, last) {
+			if !p.Less(last+1, last) {
 				break
 			}
 		}
-		p.reverse(left, last)
+		reverse(p, left, last)
 	} else {
 		// Assume we are in a weakly ascending run.
 		// Stop at the first item that is not in weakly ascensing order.
 		for ; last < right; last++ {
-			if p.less(last+1, last) {
+			if p.Less(last+1, last) {
 				break
 			}
 		}
@@ -53,7 +49,7 @@ func (p *powerSort) findOrCreateRun(left, right int) (last int) {
 		// Found a too-short natural run that we can extend.
 		// Extend and sort it using an insertion sort.
 		right = min(right, left+minRunLen-1)
-		p.insertionSort(left, right, last)
+		insertionSort(p, left, right, last)
 		last = right
 	}
 	return
@@ -62,7 +58,7 @@ func (p *powerSort) findOrCreateRun(left, right int) (last int) {
 // nodePower is adapted from nodePowerBitwise in
 // https://github.com/sebawild/nearly-optimal-mergesort-code/blob/master/src/wildinter/net/mergesort/PowerSort.java
 //
-// I have not spent enough time figuring out exactly what nodePower does
+// I have not spent enough time wrapping my head around what nodePower does
 // to determine where two adjacent runs are on-the-fly in a nearly optimal
 // binary search tree built out of the runs we want to search, but Tim Peters
 // did when he modified TimSort in Python to use powersort's merge strategy
@@ -103,7 +99,7 @@ func (p *powerSort) findOrCreateRun(left, right int) (last int) {
 // You'll notice the paper uses an O(1) method instead that relies on
 // integer divison on an integer type twice as wide as needed to hold the
 // list length, and a fast method of counting the number of leading
-// zeros in an integer.  Go has the former in bits.LeadingZeros, but on
+// zeros in an integer.  Go has the latter in bits.LeadingZeros, but on
 // 64 bit platforms Go's native integer type is already an int64, and we do not
 // have a handy int128 lying around.
 //
@@ -123,10 +119,10 @@ func (p *powerSort) findOrCreateRun(left, right int) (last int) {
 //	    return Integer.numberOfLeadingZeros(a ^ b);
 //    }
 //
-func (p *powerSort) nodePower(left, mid, right int) int {
+func nodePower(length, left, mid, right int) int {
 	leftPower := uint(left) + uint(mid)
 	rightPower := uint(mid) + uint(right) + 1
-	size := uint(len(p.data))
+	size := uint(length)
 	power := 0
 	var digitA, digitB bool
 	for {
@@ -145,28 +141,27 @@ func (p *powerSort) nodePower(left, mid, right int) int {
 	return power
 }
 
-func (p *powerSort) sort() {
-	var top, leftA, rightA, leftB, rightB, power, i, size int
-	size = len(p.data)
-	if size < 2 {
+func powersort(p sort.Interface, length int) {
+	var top, leftA, rightA, leftB, rightB, power, i int
+	if length < 2 {
 		return
 	}
-	rightA = p.findOrCreateRun(0, size-1)
-	if rightA == size-1 {
+	rightA = findOrCreateRun(p, 0, length-1)
+	if rightA == length-1 {
 		return
 	}
 	// Entries in the runs are indexed by their node power.
 	// Node power will never be more than log2(totalLen) + 1
 	// Therefore, the runstack needs to contain (log2(totalLen)+1) entries
-	runs := make([][2]int, log2(uint64(size))+1)
+	runs := make([][2]int, log2(uint64(length))+1)
 	entryAt := func(i int) bool { return !(runs[i][0] == 0 && runs[i][1] == 0) }
 
-	for rightA < size-1 {
-		leftB, rightB = rightA+1, p.findOrCreateRun(rightA+1, size-1)
-		power = p.nodePower(leftA, leftB, rightB)
+	for rightA < length-1 {
+		leftB, rightB = rightA+1, findOrCreateRun(p, rightA+1, length-1)
+		power = nodePower(length, leftA, leftB, rightB)
 		for i = top; i > power; i-- {
 			if entryAt(i) {
-				p.symMerge(runs[i][0], runs[i][1]+1, rightA+1)
+				symMerge(p, runs[i][0], runs[i][1]+1, rightA+1)
 				leftA = runs[i][0]
 				runs[i][0], runs[i][1] = 0, 0
 			}
@@ -177,14 +172,17 @@ func (p *powerSort) sort() {
 	}
 	for i = top; i >= 0; i-- {
 		if entryAt(i) {
-			p.symMerge(runs[i][0], runs[i][1]+1, size)
+			symMerge(p, runs[i][0], runs[i][1]+1, length)
 		}
 	}
 }
 
-func Powersort(vals []int, a Less) {
-	ps := &powerSort{}
-	ps.data = vals
-	ps.less = a
-	ps.sort()
+// powersort, an adaptive mergesort, described here: https://arxiv.org/pdf/1805.04154.pdf
+// The key improvement powersort makes over the standard library merge sort is in carefully
+// choosing when to merge adjacent runs of already sorted data based on their calculated
+// position in a nearly-optimal binary merge tree.  It really needs a lower level merge function
+// that deals well with unequal merge lengths.  Its behaviour does not appear to play nicely with
+// symmerge from the standard libary.
+func Powersort(v sort.Interface) {
+	powersort(v, v.Len())
 }

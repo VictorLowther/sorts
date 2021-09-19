@@ -1,8 +1,15 @@
 package sorts
 
-import "math/bits"
+import (
+	"math/bits"
+	"sort"
+)
 
-// Just some utility functions.
+// Just some useful utility functions. Most of them
+// wind up being inlined.
+func lte(s sort.Interface, a, b int) bool {
+	return !s.Less(b, a)
+}
 
 func log2(s uint64) int {
 	return 64 - bits.LeadingZeros64(s) - 1
@@ -26,46 +33,19 @@ func max(a, b int) int {
 	return b
 }
 
-// find the smallest item greater than ref between left and right
-func (sd *sortData) smallestGreaterThan(left, right, ref int) int {
-	for left < right {
-		m := median(left, right)
-		if sd.lte(m, ref) {
-			left = m + 1
-		} else {
-			right = m
-		}
-	}
-	return left
-}
-
-// find the largest item less than ref between left and right
-func (sd *sortData) largestLessThan(left, right, ref int) int {
-	right++
-	for left < right {
-		m := median(left, right)
-		if sd.less(m, ref) {
-			left = m + 1
-		} else {
-			right = m
-		}
-	}
-	return left
-}
-
-func (sd *sortData) rotateRightwards(left, right int) {
+func rotateRightwards(sd sort.Interface, left, right int) {
 	for ; right > left; right-- {
 		sd.Swap(right, right-1)
 	}
 }
 
-func (sd *sortData) rotateLeftwards(left, right int) {
+func rotateLeftwards(sd sort.Interface, left, right int) {
 	for ; left < right; left++ {
 		sd.Swap(left, left+1)
 	}
 }
 
-func (sd *sortData) reverse(left, right int) {
+func reverse(sd sort.Interface, left, right int) {
 	for left < right {
 		sd.Swap(left, right)
 		left++
@@ -75,27 +55,56 @@ func (sd *sortData) reverse(left, right int) {
 
 // swap the blocks at [a:a+count] and [b:b+count]
 // Assumes ranges do not overlap.
-func (sd *sortData) swapRange(a, b, count int) {
+func swapRange(sd sort.Interface, a, b, count int) {
 	for i := 0; i < count; i++ {
 		sd.Swap(a+i, b+i)
 	}
 }
 
-// swap internal blocks [left:mid] and [mid:right+1].
-// Assumes that left < mid < right.
-// If you are calling this with an offset if left+1 or right-1,
-// stop and use rotateLeftwards or rotateRightwards instead.
-func (sd *sortData) blockSwap(left, mid, right int) {
+// It would be great if the compiler were able to inline these.
+// Just saying.
+
+// swap internal blocks [left:mid] and [mid:right+1] using
+// the smallest number of swap operations.  Assumes
+// that left < mid < right.
+func blockSwap(sd sort.Interface, left, mid, right int) {
 	i := mid - left
 	j := right - mid + 1
 	for i != j {
 		if i > j {
-			sd.swapRange(mid-i, mid, j)
+			swapRange(sd, mid-i, mid, j)
 			i -= j
 		} else {
-			sd.swapRange(mid-i, mid+j-i, i)
+			swapRange(sd, mid-i, mid+j-i, i)
 			j -= i
 		}
 	}
-	sd.swapRange(mid-i, mid, i)
+	swapRange(sd, mid-i, mid, i)
+}
+
+// find the smallest item greater than ref between left and right
+func smallestGreaterThan(sd sort.Interface, left, right, ref int) int {
+	for left < right {
+		m := median(left, right)
+		if lte(sd, m, ref) {
+			left = m + 1
+		} else {
+			right = m
+		}
+	}
+	return left
+}
+
+// find the largest item less than ref between left and right
+func largestLessThan(sd sort.Interface, left, right, ref int) int {
+	right++
+	for left < right {
+		m := median(left, right)
+		if sd.Less(m, ref) {
+			left = m + 1
+		} else {
+			right = m
+		}
+	}
+	return left
 }
