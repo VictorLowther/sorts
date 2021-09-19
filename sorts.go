@@ -11,6 +11,8 @@ type Less func(int, int) bool
 // a Less function and sorts that array based on it.
 type Sort func([]int, Less)
 
+type internalSort func(*sortData, int, int, int)
+
 // Interface uses fn to sort a collection that conforms
 // to the standard library sort.Interface.
 //
@@ -69,18 +71,4 @@ func (s *sortData) Less(a, b int) bool {
 
 func (s *sortData) Swap(a, b int) {
 	s.data[a], s.data[b] = s.data[b], s.data[a]
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

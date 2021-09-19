@@ -2,6 +2,7 @@ package sorts
 
 import (
 	"fmt"
+	"math"
 	"math/rand"
 	"testing"
 	"time"
@@ -9,7 +10,7 @@ import (
 
 func maskedLess(j []int) Less {
 	return func(a, b int) bool {
-		va, vb := j[a]>>8, j[b]>>8
+		va, vb := j[a]>>16, j[b]>>16
 		return va < vb
 	}
 }
@@ -24,7 +25,7 @@ func maskedSorted(j []int) int {
 			return i
 		}
 		if !less(i-1, i) {
-			if j[i]&0xff >= j[i-1]&0xff {
+			if j[i]&0xffff >= j[i-1]&0xffff {
 				return i
 			}
 		}
@@ -32,17 +33,24 @@ func maskedSorted(j []int) int {
 	return len(j)
 }
 
-func makeInts(totalLen int, runLen int16) []int {
+func makeInts(randSrc rand.Source, totalLen int, runs bool) []int {
+	src := rand.New(randSrc)
 	var pos int
-	var mask byte
+	var mask uint16
+	runLen := int16(1)
+	if runs {
+		runLen = int16(math.Sqrt(float64(totalLen))) + 1
+	}
 	res := []int{}
 top:
 	for {
-		val := int(rand.Int31()) << 32
-		runCount := int16(rand.Int31n(int32(runLen+1) + 1))
-		if rand.Intn(2) == 0 {
+		val := int(src.Int31()) << 32
+		runCount := int16(src.Int31n(int32(runLen+1) + 1))
+		// decide whether this is an ascending or descending run
+		if src.Intn(2) == 0 {
 			runCount = 0 - runCount
 		}
+		mask = 0
 		for runCount != 0 {
 			pos = len(res)
 			if pos >= totalLen {
@@ -50,7 +58,11 @@ top:
 			}
 			res = append(res, val)
 			mask -= 1
-			res[pos] += int(mask) + (int(runCount) << 8)
+			if runs {
+				res[pos] += int(mask) + ((int(runCount) + src.Intn(2)) << 16)
+			} else {
+				res[pos] += int(mask) + (int(runCount) << 16)
+			}
 			if runCount > 0 {
 				runCount--
 			} else {
@@ -62,12 +74,12 @@ top:
 }
 
 func TestPowerSort(t *testing.T) {
-	rand.Seed(int64(time.Now().UnixNano()))
-	for i := 1; i < 100; i++ {
-		vals := makeInts(100, 10)
+	for i := 0; i < 10000; i++ {
+		vals := makeInts(rand.NewSource(7), i, true)
 		Powersort(vals, maskedLess(vals))
 		if failAt := maskedSorted(vals); failAt < len(vals) {
-			t.Errorf("Data not sorted at %d and %d (%08x) (%08x)", failAt-1, failAt, vals[failAt-1], vals[failAt])
+			t.Errorf("iteration %d: Data not sorted at %d and %d (%0x,%04x) (%0x,%04x)", i, failAt-1, failAt,
+				vals[failAt-1]>>16, vals[failAt-1]&0xffff, vals[failAt]>>16, vals[failAt]&0xffff)
 			return
 		}
 	}
@@ -76,56 +88,62 @@ func TestPowerSort(t *testing.T) {
 
 type sortParams struct {
 	totalLen int
-	runLen   int16
+	runs     bool
+}
+
+type sortMetric struct {
+	name string
+	s    Sort
 }
 
 func BenchmarkStableSorts(b *testing.B) {
 	rand.Seed(int64(time.Now().UnixNano()))
 	benchmarks := []sortParams{
-		{10, 0},
-		{100, 0},
-		{100, 10},
-		{500, 0},
-		{500, 30},
-		{1000, 0},
-		{1000, 10},
-		{5000, 0},
-		{5000, 10},
-		{5000, 50},
-		{10000, 0},
-		{10000, 10},
-		{50000, 0},
-		{50000, 10},
-		{50000, 50},
-		{100000, 0},
-		{100000, 10},
-		{500000, 0},
-		{500000, 10},
-		{500000, 50},
-		{1000000, 0},
-		{1000000, 100},
-		{5000000, 0},
-		{5000000, 100},
-		{5000000, 200},
-		{10000000, 0},
-		{100000, 200},
-		{500000, 0},
-		{50000000, 200},
-		{50000000, 200},
+		{10, false},
+		{100, false},
+		{100, true},
+		{500, false},
+		{500, true},
+		{1000, false},
+		{1000, true},
+		{5000, false},
+		{5000, true},
+		{10000, false},
+		{10000, true},
+		{50000, false},
+		{50000, true},
+		{50000, false},
+		{100000, true},
+		{100000, false},
+		{500000, false},
+		{500000, true},
+		{1000000, false},
+		{1000000, true},
+		{5000000, false},
+		{5000000, true},
+		{10000000, false},
+		{10000000, true},
+		{50000000, false},
+		{50000000, true},
 	}
+	sorts := []*sortMetric{
+		{name: "power", s: Powersort},
+		{name: "stdlib", s: StdlibStable},
+	}
+	seed := rand.Int63()
+	b.Logf("Using random seed %d", seed)
+	src := rand.NewSource(seed)
 	for _, bench := range benchmarks {
-		b.Run(fmt.Sprintf("power minrun %d len %d, runlen %d", minRunLen, bench.totalLen, bench.runLen), func(bb *testing.B) {
-			bb.StopTimer()
-			vals := makeInts(bench.totalLen, bench.runLen)
-			bb.StartTimer()
-			Powersort(vals, maskedLess(vals))
-		})
-		b.Run(fmt.Sprintf("stable len %d, runlen %d", bench.totalLen, bench.runLen), func(bb *testing.B) {
-			bb.StopTimer()
-			vals := makeInts(bench.totalLen, bench.runLen)
-			bb.StartTimer()
-			StdlibStable(vals, maskedLess(vals))
-		})
+		for _, s := range sorts {
+			cmps := uint64(0)
+			b.Run(fmt.Sprintf("%s len %d, runs %v", s.name, bench.totalLen, bench.runs), func(bb *testing.B) {
+				bb.StopTimer()
+				vals := makeInts(src, bench.totalLen, bench.runs)
+				bb.StartTimer()
+				less := maskedLess(vals)
+				s.s(vals, func(a, b int) bool { cmps++; return less(a, b) })
+				bb.ReportMetric(float64(cmps), "cmps")
+			})
+		}
 	}
-
 }

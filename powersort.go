@@ -1,9 +1,5 @@
 package sorts
 
-import (
-	"math"
-)
-
 // Powersort, an adaptive mergesort, described here: https://arxiv.org/pdf/1805.04154.pdf
 // The key improvement powersort makes over the standard library merge sort is in carefully
 // choosing when to merge adjacent runs of already sorted data based on their calculated
@@ -15,143 +11,173 @@ var (
 
 type powerSort struct {
 	sortData
-	mergeBuf []int
 }
 
 // Find or create an ascending run in the given range.
 // This will also handle reversing descending runs.
 //
-// start is the index of the first item to consider, end is the
+// left is the index of the first item to consider, right is the
 // index of the last item to consider.
 //
-// sortedTo is the last index that is part of the run.
+// last is the last index that is part of the run.
 //
 // If we found a natural run that is less than minRunLen, we will
 // extend it to minRunLen using an insertion sort .
-func (p *powerSort) findOrCreateRun(start, last int) (sortedTo int) {
-	sortedTo = start
-	if sortedTo == last {
+func (p *powerSort) findOrCreateRun(left, right int) (last int) {
+	last = left
+	if last == right {
 		return
 	}
-	sortedTo++
-	if p.less(sortedTo, sortedTo-1) {
+	last++
+	if p.less(last, last-1) {
 		// Assume we are in a descending run.
 		// Stop at the first item that is not in strict descending order.
 		// Reverse the list that we found that was in strict descending order.
-		for ; sortedTo < last; sortedTo++ {
-			if !p.less(sortedTo+1, sortedTo) {
+		for ; last < right; last++ {
+			if !p.less(last+1, last) {
 				break
 			}
 		}
-		p.reverse(start, sortedTo)
+		p.reverse(left, last)
 	} else {
 		// Assume we are in a weakly ascending run.
 		// Stop at the first item that is not in weakly ascensing order.
-		for ; sortedTo < last; sortedTo++ {
-			if p.less(sortedTo+1, sortedTo) {
+		for ; last < right; last++ {
+			if p.less(last+1, last) {
 				break
 			}
 		}
 	}
-	if start+minRunLen-1 <= last &&
-		sortedTo < last &&
-		sortedTo-start < minRunLen-1 {
+
+	if last-left < minRunLen-1 {
 		// Found a too-short natural run that we can extend.
 		// Extend and sort it using an insertion sort.
-		last = min(last, start+minRunLen-1)
-		p.insertionSort(start, last, sortedTo)
-		sortedTo = last
+		right = min(right, left+minRunLen-1)
+		p.insertionSort(left, right, last)
+		last = right
 	}
 	return
 }
 
-// This is straight up black magic voodoo that calculates the hypothetical
-// depth in a nearly optimal binary merge tree this run would have.
-// The idea is to defer merges until we are ascending in the tree, and at that
-// point the merges that are queued up in the runs list are in the more or less
-// optimal order to be merged.
-//
-// Adapted from nodePowerBitwise in
+// nodePower is adapted from nodePowerBitwise in
 // https://github.com/sebawild/nearly-optimal-mergesort-code/blob/master/src/wildinter/net/mergesort/PowerSort.java
-func (p *powerSort) nodePower(startA, startB, endB int) int {
-	relativePowerA := startA + startB
-	relativePowerB := startB + endB + 1
-	commonBits := 0
+//
+// I have not spent enough time figuring out exactly what nodePower does
+// to determine where two adjacent runs are on-the-fly in a nearly optimal
+// binary search tree built out of the runs we want to search, but Tim Peters
+// did when he modified TimSort in Python to use powersort's merge strategy
+// in https://github.com/python/cpython/commit/5cb4c672d855033592f0e05162f887def236c00a
+//
+// Since his explanation is so much more readable than what is in the paper,
+// I have copied it nearly verbatim below, with changes for the different
+// function and variable names, and platform limitations:
+//
+// (from Tim Peters)
+//
+// The nodePower function computes a run's "power". Say two adjacent runs
+// begin at index startA. The first runs from left to mid-1, and the second
+// runs from mid to right.  The lengths of the first run is n1 := mid-left,
+// and the length of the second run is n2 := right - mid + 1.
+// The list has total length n.
+//
+// The "power" of the first run is a small integer, the depth of the node
+// connecting the two runs in an ideal binary merge tree, where power 1 is the
+// root node, and the power increases by 1 for each level deeper in the tree.
+//
+// The power is the least integer L such that the "midpoint interval" contains
+// a rational number of the form J/2**L. The midpoint interval is the semi-
+// closed interval:
+//
+//     ((left + n1/2)/n, (mid + n2/2)/n]
+//
+// Yes, that's brain-busting at first ;-) Concretely, if (left + n1/2)/n and
+// (mid + n2/2)/n are computed to infinite precision in binary, the power L is
+// the first position at which the 2**-L bit differs between the expansions.
+// Since the left end of the interval is less than the right end, the first
+// differing bit must be a 0 bit in the left quotient and a 1 bit in the right
+// quotient.
+//
+// nodePower emulates these divisions, 1 bit at a time, using comparisons,
+// subtractions, and shifts in a loop.
+//
+// You'll notice the paper uses an O(1) method instead that relies on
+// integer divison on an integer type twice as wide as needed to hold the
+// list length, and a fast method of counting the number of leading
+// zeros in an integer.  Go has the former in bits.LeadingZeros, but on
+// 64 bit platforms Go's native integer type is already an int64, and we do not
+// have a handy int128 lying around.
+//
+// But since runs in our algorithm are almost never very short, the once-per-run
+// overhead of nodePower seems lost in the noise.
+//
+// (end from Tim Peters)
+//
+// For the interested, the Java code that does this with no loops is as follows:
+//
+//    private static int nodePower(int size, int left, int mid, int right) {
+//	    int twoN = size << 1; // 2*n
+//	    long l = left + mid;
+//	    long r = mid + right + 1;
+//	    int a = (int) ((l << 31) / twoN);
+//	    int b = (int) ((r << 31) / twoN);
+//	    return Integer.numberOfLeadingZeros(a ^ b);
+//    }
+//
+func (p *powerSort) nodePower(left, mid, right int) int {
+	leftPower := uint(left) + uint(mid)
+	rightPower := uint(mid) + uint(right) + 1
+	size := uint(len(p.data))
+	power := 0
 	var digitA, digitB bool
 	for {
-		digitA, digitB = relativePowerA >= len(p.data), relativePowerB >= len(p.data)
+		digitA, digitB = leftPower >= size, rightPower >= size
 		if digitA != digitB {
 			break
 		}
-		commonBits++
+		power++
 		if digitA {
-			relativePowerA -= len(p.data)
+			leftPower -= size
+			rightPower -= size
 		}
-		if digitB {
-			relativePowerB -= len(p.data)
-		}
-		relativePowerA <<= 1
-		relativePowerB <<= 1
-
+		leftPower <<= 1
+		rightPower <<= 1
 	}
-	return commonBits
-}
-
-func (p *powerSort) mergeAt(left, mid, right int) {
-	if !p.less(mid+1, mid) {
-		// Already merged
-		return
-	}
-	left = p.binarySearchForwards(left, mid-1, mid)
-	right = p.binarySearchBackwards(mid, right, mid-1)
-	start := left
-	p.mergeBuf = p.mergeBuf[:0]
-	mid++
-	pivot := mid
-	for left < pivot && mid < right+1 {
-		if p.less(mid, left) {
-			p.mergeBuf = append(p.mergeBuf, p.data[mid])
-			mid++
-		} else {
-			p.mergeBuf = append(p.mergeBuf, p.data[left])
-			left++
-		}
-	}
-	if left < pivot {
-		p.mergeBuf = append(p.mergeBuf, p.data[left:pivot]...)
-	} else {
-		p.mergeBuf = append(p.mergeBuf, p.data[mid:right+1]...)
-	}
-	copy(p.data[start:], p.mergeBuf)
-
+	return power
 }
 
 func (p *powerSort) sort() {
-	var top, firstA, lastA, firstB, lastB, power, i, totalLen int
-	totalLen = len(p.data)
+	var top, leftA, rightA, leftB, rightB, power, i, size int
+	size = len(p.data)
+	if size < 2 {
+		return
+	}
+	rightA = p.findOrCreateRun(0, size-1)
+	if rightA == size-1 {
+		return
+	}
 	// Entries in the runs are indexed by their node power.
 	// Node power will never be more than log2(totalLen) + 1
 	// Therefore, the runstack needs to contain (log2(totalLen)+1) entries
-	runs := make([][2]int, int(math.Log2(float64(totalLen)))+1)
+	runs := make([][2]int, log2(uint64(size))+1)
 	entryAt := func(i int) bool { return !(runs[i][0] == 0 && runs[i][1] == 0) }
-	lastA = p.findOrCreateRun(0, totalLen-1)
-	for lastA < totalLen-1 {
-		firstB, lastB = lastA+1, p.findOrCreateRun(lastA+1, totalLen-1)
-		power = p.nodePower(firstA, firstB, lastB)
+
+	for rightA < size-1 {
+		leftB, rightB = rightA+1, p.findOrCreateRun(rightA+1, size-1)
+		power = p.nodePower(leftA, leftB, rightB)
 		for i = top; i > power; i-- {
 			if entryAt(i) {
-				p.mergeAt(runs[i][0], runs[i][1], lastA)
-				firstA = runs[i][0]
+				p.symMerge(runs[i][0], runs[i][1]+1, rightA+1)
+				leftA = runs[i][0]
 				runs[i][0], runs[i][1] = 0, 0
 			}
 		}
-		runs[power][0], runs[power][1] = firstA, lastA
+		runs[power][0], runs[power][1] = leftA, rightA
 		top = power
-		firstA, lastA = firstB, lastB
+		leftA, rightA = leftB, rightB
 	}
 	for i = top; i >= 0; i-- {
 		if entryAt(i) {
-			p.mergeAt(runs[i][0], runs[i][1], totalLen-1)
+			p.symMerge(runs[i][0], runs[i][1]+1, size)
 		}
 	}
 }
